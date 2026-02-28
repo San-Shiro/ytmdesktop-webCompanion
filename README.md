@@ -1,5 +1,5 @@
 # YouTube Music Desktop App
-### Now with a Fresh new Codebase 😉
+### Now with a Fresh new Codebase 😉 — and a Built-in Web Dashboard 📱
 
 ![YouTube Music Desktop App](.github/images/readme_main_app.png)
 
@@ -15,6 +15,29 @@ TODO: Write guides for v2. While these may still be helpful they are geared towa
 1. [How to use](https://github.com/ytmdesktop/ytmdesktop/wiki/How-use)
 2. [FAQ](https://github.com/ytmdesktop/ytmdesktop/wiki/FAQ)
 -->
+
+# 📱 Web Dashboard
+
+Control YouTube Music from your phone or any browser on your local network — no extra apps needed.
+
+### How to Use
+
+1. **Enable** the companion server in Settings → Integrations
+2. **Open** `http://localhost:9863/dashboard` in any browser
+3. **Enter** the dashboard password (default: `ytmd`, configurable in Settings)
+4. **From your phone** — open the Dashboard URL shown in Settings (e.g. `http://192.168.x.x:9863/dashboard`)
+
+### Features
+
+- 🎵 **Full playback control** — play, pause, skip, seek, volume, shuffle, like/dislike
+- 🔍 **Search** — find songs, albums, artists, playlists
+- 📂 **Library** — browse your playlists and albums
+- 🏠 **Home** — personalized recommendations from YouTube Music
+- 📋 **Queue** — view and manage the current queue
+- 🔒 **Password protected** — configurable from Settings
+- 📱 **Responsive** — works on desktop and mobile browsers
+- ⚡ **Zero setup** — built into the app, no separate server or proxy needed
+
 
 # ⬇️ Download at
 <a href="https://repology.org/project/ytmdesktop/versions">
