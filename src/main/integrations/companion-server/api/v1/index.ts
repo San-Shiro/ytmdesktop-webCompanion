@@ -3,7 +3,7 @@ import Conf from "conf";
 import { FastifyPluginCallback, FastifyPluginOptions } from "fastify";
 import { StoreSchema } from "~shared/store/schema";
 import playerStateStore, { PlayerState, RepeatMode } from "../../../../player-state-store";
-import { createAuthToken, getIsTemporaryAuthCodeValidAndRemove, getTemporaryAuthCode, isAuthValid, isAuthValidMiddleware } from "../../api-shared/auth";
+import { createAuthToken, getIsTemporaryAuthCodeValidAndRemove, getTemporaryAuthCode, isAuthValid, isAuthValidMiddleware, isDashboardSessionId } from "../../api-shared/auth";
 import fastifyRateLimit from "@fastify/rate-limit";
 import crypto from "crypto";
 import {
@@ -24,6 +24,9 @@ import {
   InvalidQueueIndexError,
   InvalidRepeatModeError,
   InvalidChangeVideoRequestError,
+  InvalidVideoIdError,
+  InvalidPlaylistIdError,
+  LyricsUnavailableError,
   InvalidVolumeError,
   UnauthenticatedError,
   YouTubeMusicTimeOutError,
@@ -91,6 +94,16 @@ type Playlist = {
   id: string;
   title: string;
 };
+
+type LyricsResult = {
+  lyrics: string | null;
+  source: string | null;
+} | null;
+
+type AddToPlaylistResult = {
+  success: boolean;
+  status: string;
+} | null;
 
 const authorizationWindows: BrowserWindow[] = [];
 
@@ -227,13 +240,70 @@ const CompanionServerAPIv1: FastifyPluginCallback<CompanionServerAPIv1Options> =
           ytmView.webContents.send("remoteControl:execute", "toggleDislike");
           break;
         }
+
+        case "addToQueue": {
+          const videoId = commandRequest.data;
+          if (!videoId) {
+            throw new InvalidVideoIdError();
+          }
+          ytmView.webContents.send("remoteControl:execute", "addToQueue", videoId);
+          break;
+        }
+
+        case "playNext": {
+          const videoId = commandRequest.data;
+          if (!videoId) {
+            throw new InvalidVideoIdError();
+          }
+          ytmView.webContents.send("remoteControl:execute", "playNext", videoId);
+          break;
+        }
+
+        case "removeQueueIndex": {
+          const index = commandRequest.data;
+          const state = playerStateStore.getState();
+
+          if (isNaN(index) || index > state.queue.items.length - 1) {
+            throw new InvalidQueueIndexError(index);
+          }
+
+          ytmView.webContents.send("remoteControl:execute", "removeQueueIndex", index);
+          break;
+        }
+
+        case "toggleLibrary": {
+          ytmView.webContents.send("remoteControl:execute", "toggleLibrary");
+          break;
+        }
+
+        case "addToPlaylist": {
+          const playlistId = commandRequest.data.playlistId;
+          const videoId = commandRequest.data.videoId;
+          if (!playlistId) {
+            throw new InvalidPlaylistIdError();
+          }
+          ytmView.webContents.send("remoteControl:execute", "addToPlaylist", { playlistId, videoId });
+          break;
+        }
+
+        case "moveQueueItem": {
+          const moveFrom = commandRequest.data.from;
+          const moveTo = commandRequest.data.to;
+          const state = playerStateStore.getState();
+          const maxIdx = state.queue.items.length - 1;
+          if (moveFrom < 0 || moveFrom > maxIdx || moveTo < 0 || moveTo > maxIdx) {
+            throw new InvalidQueueIndexError(moveFrom);
+          }
+          ytmView.webContents.send("remoteControl:execute", "moveQueueItem", JSON.stringify({ from: moveFrom, to: moveTo }));
+          break;
+        }
       }
     }
   };
 
   await fastify.register(fastifyRateLimit, {
     global: true,
-    max: 100,
+    max: 500,
     timeWindow: 1000 * 60
   });
 
@@ -420,49 +490,187 @@ const CompanionServerAPIv1: FastifyPluginCallback<CompanionServerAPIv1Options> =
     }
   );
 
-  fastify.get(
-    "/playlists",
-    {
-      config: {
-        // This endpoint sends a real API request to YTM which allows to fetch playlists.
-        // API users: Please cache playlists, they are unlikely to change often. A websocket event will be emitted if a playlist is created or deleted
-        rateLimit: {
-          hook: "preHandler",
-          max: 1,
-          timeWindow: 1000 * 30,
-          keyGenerator: request => {
-            return request.authId || request.ip;
+
+  // Helper to create IPC-based routes that send a message to the renderer and wait for a response
+  const createIpcRoute = (
+    method: "get" | "post",
+    path: string,
+    ipcChannel: string,
+    argsExtractor: (request: any) => any[],
+    rateLimitConfig: { max: number; timeWindow: number } = { max: 5, timeWindow: 1000 * 30 }
+  ) => {
+    fastify[method](
+      path,
+      {
+        config: {
+          rateLimit: {
+            hook: "preHandler",
+            ...rateLimitConfig,
+            keyGenerator: (request: any) => request.authId || request.ip
           }
+        },
+        preHandler: (request: any, response: any, next: any) => {
+          return isAuthValidMiddleware(options.getStore(), request, response, next);
         }
       },
-      preHandler: (request, response, next) => {
+      async (request: any, response: any) => {
+        const ytmView = options.getYtmView();
+        if (ytmView) {
+          const requestId = crypto.randomUUID();
+          const args = argsExtractor(request);
+
+          const responseListener = (event: Electron.IpcMainEvent, result: any) => {
+            if (event.sender !== ytmView.webContents) return;
+            if (result) {
+              response.send(result);
+            } else {
+              response.code(500).send({ error: `${ipcChannel} returned no data` });
+            }
+          };
+          ipcMain.once(`${ipcChannel}:response:${requestId}`, responseListener);
+
+          ytmView.webContents.send(ipcChannel, requestId, ...args);
+
+          await new Promise((_resolve, reject) =>
+            setTimeout(() => {
+              ipcMain.removeListener(`${ipcChannel}:response:${requestId}`, responseListener);
+              reject(new YouTubeMusicTimeOutError());
+            }, 1000 * 30)
+          );
+        } else {
+          throw new YouTubeMusicUnavailableError();
+        }
+      }
+    );
+  };
+
+  // GET /search?q=...&filter=songs|videos|albums|artists|playlists
+  createIpcRoute("get", "/search", "ytmView:search", (request) => {
+    const query = request.query?.q || "";
+    const filter = request.query?.filter || null;
+    return [query, filter];
+  }, { max: 10, timeWindow: 1000 * 60 });
+
+  // GET /home — personalized recommendations
+  createIpcRoute("get", "/home", "ytmView:home", () => [], { max: 3, timeWindow: 1000 * 60 });
+
+  // GET /explore — charts, new releases, moods & genres
+  createIpcRoute("get", "/explore", "ytmView:explore", () => [], { max: 5, timeWindow: 1000 * 60 });
+
+  // GET /history — listening history
+  createIpcRoute("get", "/history", "ytmView:history", () => [], { max: 3, timeWindow: 1000 * 60 });
+
+  // GET /queue/chips — get automix mood filter chips
+  createIpcRoute("get", "/queue/chips", "ytmView:getAutomixChips", () => [], { max: 5, timeWindow: 1000 * 30 });
+
+  // POST /queue/chips — select an automix mood filter chip
+  createIpcRoute("post", "/queue/chips", "ytmView:selectAutomixChip", (request) => {
+    return [request.body?.index ?? 0];
+  }, { max: 5, timeWindow: 1000 * 30 });
+
+  // GET /playlists — user's playlists (cache results, websocket emits on create/delete)
+  createIpcRoute("get", "/playlists", "ytmView:getPlaylists", () => [], { max: 1, timeWindow: 1000 * 30 });
+
+  // GET /lyrics — lyrics for currently playing song
+  createIpcRoute("get", "/lyrics", "ytmView:getLyrics", () => [], { max: 1, timeWindow: 1000 * 10 });
+
+  // POST /playlists/:playlistId/add — add current song to a playlist
+  createIpcRoute("post", "/playlists/:playlistId/add", "ytmView:addToPlaylist", (request) => {
+    return [request.params.playlistId, request.body?.videoId];
+  }, { max: 5, timeWindow: 1000 * 30 });
+
+  // --- Sleep Timer ---
+  let sleepTimerId: ReturnType<typeof setTimeout> | null = null;
+  let sleepTimerEndAt: number | null = null;
+
+  fastify.post(
+    "/sleep-timer",
+    {
+      config: {
+        rateLimit: {
+          hook: "preHandler",
+          max: 5,
+          timeWindow: 1000 * 30,
+          keyGenerator: (request: any) => request.authId || request.ip
+        }
+      },
+      preHandler: (request: any, response: any, next: any) => {
         return isAuthValidMiddleware(options.getStore(), request, response, next);
       }
     },
-    async (request, response) => {
-      const ytmView = options.getYtmView();
-      if (ytmView) {
-        const requestId = crypto.randomUUID();
+    (request: any, response) => {
+      const minutes = request.body?.minutes;
 
-        const playlistsResponseListener = (event: Electron.IpcMainEvent, playlists: Playlist[]) => {
-          if (event.sender !== ytmView.webContents) return;
-          response.send(playlists);
-        };
-        ipcMain.once(`ytmView:getPlaylists:response:${requestId}`, playlistsResponseListener);
+      // Cancel existing timer
+      if (sleepTimerId) {
+        clearTimeout(sleepTimerId);
+        sleepTimerId = null;
+        sleepTimerEndAt = null;
+      }
 
-        ytmView.webContents.send(`ytmView:getPlaylists`, requestId);
+      if (typeof minutes !== "number" || minutes <= 0) {
+        response.send({ active: false, remainingSeconds: 0 });
+        return;
+      }
 
-        await new Promise((_resolve, reject) =>
-          setTimeout(() => {
-            ipcMain.removeListener(`ytmView:getPlaylists:response:${requestId}`, playlistsResponseListener);
-            reject(new YouTubeMusicTimeOutError());
-          }, 1000 * 30)
-        );
+      const ms = minutes * 60 * 1000;
+      sleepTimerEndAt = Date.now() + ms;
+
+      sleepTimerId = setTimeout(() => {
+        const ytmView = options.getYtmView();
+        if (ytmView) {
+          ytmView.webContents.send("remoteControl:execute", "pause");
+        }
+        sleepTimerId = null;
+        sleepTimerEndAt = null;
+      }, ms);
+
+      response.send({ active: true, remainingSeconds: Math.round(ms / 1000) });
+    }
+  );
+
+  fastify.get(
+    "/sleep-timer",
+    {
+      config: {
+        rateLimit: {
+          hook: "preHandler",
+          max: 10,
+          timeWindow: 1000 * 30,
+          keyGenerator: (request: any) => request.authId || request.ip
+        }
+      },
+      preHandler: (request: any, response: any, next: any) => {
+        return isAuthValidMiddleware(options.getStore(), request, response, next);
+      }
+    },
+    (request, response) => {
+      if (sleepTimerEndAt && sleepTimerId) {
+        const remaining = Math.max(0, Math.round((sleepTimerEndAt - Date.now()) / 1000));
+        response.send({ active: true, remainingSeconds: remaining });
       } else {
-        throw new YouTubeMusicUnavailableError();
+        response.send({ active: false, remainingSeconds: 0 });
       }
     }
   );
+
+  // GET /browse/:browseId — browse album, artist, playlist
+  createIpcRoute("get", "/browse/:browseId", "ytmView:browse", (request) => {
+    return [request.params.browseId];
+  });
+
+  // GET /song/:videoId — detailed song metadata
+  createIpcRoute("get", "/song/:videoId", "ytmView:songInfo", (request) => {
+    return [request.params.videoId];
+  });
+
+  // GET /next/:videoId — Up Next / related songs
+  createIpcRoute("get", "/next/:videoId", "ytmView:next", (request) => {
+    return [request.params.videoId, request.query?.playlistId || null];
+  });
+
+  // GET /library-state — Library + like state for current song
+  createIpcRoute("get", "/library-state", "ytmView:libraryState", () => [], { max: 5, timeWindow: 1000 * 10 });
 
   fastify.get(
     "/state",
@@ -515,6 +723,15 @@ const CompanionServerAPIv1: FastifyPluginCallback<CompanionServerAPIv1Options> =
 
   fastify.ready().then(() => {
     fastify.io.of("/api/v1/realtime").use((socket, next) => {
+      // Dashboard session bypass — parse cookie from handshake headers
+      const cookieHeader = socket.handshake.headers.cookie || "";
+      const sessionMatch = cookieHeader.match(/ytmd_session=([^;]+)/);
+      if (sessionMatch && isDashboardSessionId(sessionMatch[1])) {
+        socket.data.tokenId = "dashboard";
+        next();
+        return;
+      }
+
       const token = socket.handshake.auth.token;
       const [validSession, tokenId] = isAuthValid(options.getStore(), token);
       if (validSession) {

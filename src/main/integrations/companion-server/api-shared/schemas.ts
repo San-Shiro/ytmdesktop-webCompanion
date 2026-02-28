@@ -67,6 +67,43 @@ export const APIV1CommandRequestBody = Type.Union([
   }),
   Type.Object({
     command: Type.Literal("toggleDislike")
+  }),
+  Type.Object({
+    command: Type.Literal("addToQueue"),
+    data: Type.String({
+      minLength: 1
+    })
+  }),
+  Type.Object({
+    command: Type.Literal("playNext"),
+    data: Type.String({
+      minLength: 1
+    })
+  }),
+  Type.Object({
+    command: Type.Literal("removeQueueIndex"),
+    data: Type.Number({
+      minimum: 0
+    })
+  }),
+  Type.Object({
+    command: Type.Literal("toggleLibrary")
+  }),
+  Type.Object({
+    command: Type.Literal("addToPlaylist"),
+    data: Type.Object({
+      playlistId: Type.String({
+        minLength: 1
+      }),
+      videoId: Type.Optional(Type.String())
+    })
+  }),
+  Type.Object({
+    command: Type.Literal("moveQueueItem"),
+    data: Type.Object({
+      from: Type.Number({ minimum: 0 }),
+      to: Type.Number({ minimum: 0 })
+    })
   })
 ]);
 export type APIV1CommandRequestBodyType = Static<typeof APIV1CommandRequestBody>;

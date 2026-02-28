@@ -366,9 +366,12 @@ const store = new Conf<StoreSchema>({
     integrations: {
       companionServerEnabled: false,
       companionServerAuthTokens: null,
+      companionServerPort: 9863,
       companionServerCORSWildcardEnabled: false,
       discordPresenceEnabled: false,
-      lastFMEnabled: false
+      lastFMEnabled: false,
+      companionDashboardEnabled: true,
+      companionDashboardPassword: "ytmd"
     },
     shortcuts: {
       playPause: "",
@@ -523,6 +526,15 @@ store.onDidAnyChange(async (newState, oldState) => {
     if (newState.integrations.companionServerEnabled && oldState.integrations.companionServerEnabled) {
       await companionServer.disable();
       await companionServer.enable();
+    }
+  }
+
+  if (newState.integrations.companionServerPort !== oldState.integrations.companionServerPort) {
+    // Restart the companion server if the port changed
+    if (newState.integrations.companionServerEnabled && oldState.integrations.companionServerEnabled) {
+      await companionServer.disable();
+      await companionServer.enable();
+      log.info(`Companion server port changed to ${newState.integrations.companionServerPort}`);
     }
   }
 
