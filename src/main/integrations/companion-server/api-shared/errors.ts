@@ -7,6 +7,10 @@ const errorCodes = [
   "INVALID_SEEK_POSITION",
   "INVALID_QUEUE_INDEX",
   "INVALID_CHANGE_REQUEST",
+  "INVALID_VIDEO_ID",
+  "INVALID_PLAYLIST_ID",
+  "LYRICS_UNAVAILABLE",
+  "QUEUE_ACTION_FAILED",
   "UNAUTHENTICATED",
   "AUTHORIZATION_DISABLED",
   "AUTHORIZATION_INVALID",
@@ -23,6 +27,10 @@ export const InvalidRepeatModeError = createError<[RepeatMode]>("INVALID_REPEAT_
 export const InvalidPositionError = createError<[number]>("INVALID_SEEK_POSITION", "Seek position '%s' is invalid", 400);
 export const InvalidQueueIndexError = createError<[number]>("INVALID_QUEUE_INDEX", "'%s' is an invalid queue index for the current queue", 400);
 export const InvalidChangeVideoRequestError = createError<[]>("INVALID_CHANGE_REQUEST", "'videoId', 'playlistId', or both must be provided", 400);
+export const InvalidVideoIdError = createError<[]>("INVALID_VIDEO_ID", "A valid videoId must be provided", 400);
+export const InvalidPlaylistIdError = createError<[]>("INVALID_PLAYLIST_ID", "A valid playlistId must be provided", 400);
+export const LyricsUnavailableError = createError<[]>("LYRICS_UNAVAILABLE", "Lyrics are not available for the current song", 404);
+export const QueueActionFailedError = createError<[string]>("QUEUE_ACTION_FAILED", "Queue action failed: %s", 500);
 export const UnauthenticatedError = createError<[]>("UNAUTHENTICATED", "Authentication not provided or invalid", 401);
 export const AuthorizationDisabledError = createError<[]>("AUTHORIZATION_DISABLED", "Authorization requests are disabled", 403);
 export const AuthorizationInvalidError = createError<[]>("AUTHORIZATION_INVALID", "Authorization invalid", 400);

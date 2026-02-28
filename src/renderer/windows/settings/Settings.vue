@@ -58,9 +58,12 @@ const companionServerEnabled = ref<boolean>(integrations.companionServerEnabled)
 const companionServerAuthTokens = ref<AuthToken[]>(
   safeStorageAvailable.value ? (JSON.parse(await safeStorage.decryptString(integrations.companionServerAuthTokens)) ?? []) : []
 );
+const companionServerPort = ref<number>(integrations.companionServerPort ?? 9863);
 const companionServerCORSWildcardEnabled = ref<boolean>(integrations.companionServerCORSWildcardEnabled);
 const discordPresenceEnabled = ref<boolean>(integrations.discordPresenceEnabled);
 const lastFMEnabled = ref<boolean>(integrations.lastFMEnabled);
+const companionDashboardEnabled = ref<boolean>(integrations.companionDashboardEnabled ?? true);
+const companionDashboardPassword = ref<string>(integrations.companionDashboardPassword ?? "ytmd");
 
 const shortcutPlayPause = ref<string>(shortcuts.playPause);
 const shortcutNext = ref<string>(shortcuts.next);
@@ -96,9 +99,12 @@ store.onDidAnyChange(async newState => {
   companionServerAuthTokens.value = safeStorageAvailable.value
     ? (JSON.parse(await safeStorage.decryptString(newState.integrations.companionServerAuthTokens)) ?? [])
     : [];
+  companionServerPort.value = newState.integrations.companionServerPort ?? 9863;
   companionServerCORSWildcardEnabled.value = newState.integrations.companionServerCORSWildcardEnabled;
   discordPresenceEnabled.value = newState.integrations.discordPresenceEnabled;
   lastFMEnabled.value = newState.integrations.lastFMEnabled;
+  companionDashboardEnabled.value = newState.integrations.companionDashboardEnabled ?? true;
+  companionDashboardPassword.value = newState.integrations.companionDashboardPassword ?? "ytmd";
   lastFMSessionKey.value = newState.lastfm.sessionKey;
   scrobblePercent.value = newState.lastfm.scrobblePercent;
 
@@ -166,9 +172,12 @@ async function settingsChanged() {
   store.set("playback.ratioVolume", ratioVolume.value);
 
   store.set("integrations.companionServerEnabled", companionServerEnabled.value);
+  store.set("integrations.companionServerPort", companionServerPort.value);
   store.set("integrations.companionServerCORSWildcardEnabled", companionServerCORSWildcardEnabled.value);
   store.set("integrations.discordPresenceEnabled", discordPresenceEnabled.value);
   store.set("integrations.lastFMEnabled", lastFMEnabled.value);
+  store.set("integrations.companionDashboardEnabled", companionDashboardEnabled.value);
+  store.set("integrations.companionDashboardPassword", companionDashboardPassword.value);
   store.set("lastfm.scrobblePercent", scrobblePercent.value);
 
   store.set("shortcuts.playPause", shortcutPlayPause.value);
@@ -351,6 +360,22 @@ window.ytmd.handleUpdateDownloaded(() => {
           />
           <YTMDSetting
             v-if="companionServerEnabled && safeStorageAvailable"
+            type="custom"
+            indented
+            name="Companion server port"
+            description="Port the companion server listens on (default: 9863). Requires restart to apply."
+          >
+            <input
+              v-model.number="companionServerPort"
+              type="number"
+              min="1024"
+              max="65535"
+              style="width: 80px; background: #212121; border: 1px solid #414141; border-radius: 4px; color: #fff; padding: 4px 8px; text-align: center;"
+              @change="settingChangedRequiresRestart"
+            />
+          </YTMDSetting>
+          <YTMDSetting
+            v-if="companionServerEnabled && safeStorageAvailable"
             v-model="companionServerCORSWildcardEnabled"
             type="checkbox"
             indented
@@ -367,6 +392,29 @@ window.ytmd.handleUpdateDownloaded(() => {
             description="Automatically disables after the first successful authorization or 5 minutes has passed"
             @change="memorySettingsChanged"
           />
+          <YTMDSetting
+            v-if="companionServerEnabled && safeStorageAvailable"
+            v-model="companionDashboardEnabled"
+            type="checkbox"
+            indented
+            name="Web dashboard"
+            description="Serve a web dashboard at /dashboard for remote control from phone or browser"
+            @change="settingsChanged"
+          />
+          <YTMDSetting
+            v-if="companionServerEnabled && safeStorageAvailable && companionDashboardEnabled"
+            type="custom"
+            indented
+            name="Dashboard password"
+            description="Password required to access the web dashboard"
+          >
+            <input
+              v-model="companionDashboardPassword"
+              type="text"
+              style="width: 140px; background: #212121; border: 1px solid #414141; border-radius: 4px; color: #fff; padding: 4px 8px;"
+              @change="settingsChanged"
+            />
+          </YTMDSetting>
           <YTMDSetting
             v-if="companionServerEnabled && safeStorageAvailable"
             type="custom"

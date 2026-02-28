@@ -17,6 +17,20 @@ import hookPlayerApiEventsScript from "./scripts/hookplayerapievents.script?raw"
 import getPlaylistsScript from "./scripts/getplaylists.script?raw";
 import toggleLikeScript from "./scripts/togglelike.script?raw";
 import toggleDislikeScript from "./scripts/toggledislike.script?raw";
+import addToQueueScript from "./scripts/addtoqueue.script?raw";
+import getLyricsScript from "./scripts/getlyrics.script?raw";
+import addToPlaylistScript from "./scripts/addtoplaylist.script?raw";
+import parsersScript from "./scripts/parsers.script?raw";
+import innertubeScript from "./scripts/innertube.script?raw";
+import searchScript from "./scripts/search.script?raw";
+import homeScript from "./scripts/home.script?raw";
+import browseScript from "./scripts/browse.script?raw";
+import songInfoScript from "./scripts/songinfo.script?raw";
+import nextScript from "./scripts/next.script?raw";
+import exploreScript from "./scripts/explore.script?raw";
+import historyScript from "./scripts/history.script?raw";
+import moveQueueScript from "./scripts/movequeue.script?raw";
+import automixChipsScript from "./scripts/automixchips.script?raw";
 
 const store = new Store<StoreSchema>();
 
@@ -276,6 +290,8 @@ window.addEventListener("load", async () => {
   await createAdditionalPlayerBarControls();
   await hideChromecastButton();
   await hookPlayerApiEvents();
+  await (await webFrame.executeJavaScript(parsersScript))();
+  await (await webFrame.executeJavaScript(innertubeScript))();
   overrideHistoryButtonDisplay();
 
   const integrationScripts: { [integrationName: string]: { [scriptName: string]: string } } = await ipcRenderer.invoke("ytmView:getIntegrationScripts");
@@ -581,6 +597,133 @@ window.addEventListener("load", async () => {
         );
         break;
       }
+
+      case "addToQueue": {
+        const videoIdQueue: string = value;
+        try {
+          await (await webFrame.executeJavaScript(addToQueueScript))(videoIdQueue, "addToQueue");
+        } catch (e) {
+          console.error("Failed to add to queue:", e);
+        }
+        break;
+      }
+
+      case "playNext": {
+        const videoIdNext: string = value;
+        try {
+          await (await webFrame.executeJavaScript(addToQueueScript))(videoIdNext, "playNext");
+        } catch (e) {
+          console.error("Failed to add play next:", e);
+        }
+        break;
+      }
+
+      case "removeQueueIndex": {
+        const removeIndex: number = parseInt(value);
+        (
+          await webFrame.executeJavaScript(`
+            (function(index) {
+              const state = window.__YTMD_HOOK__.ytmStore.getState();
+              const queue = state.queue;
+
+              const maxQueueIndex = queue.items.length - 1;
+
+              if (index < 0 || index > maxQueueIndex) {
+                return false;
+              }
+
+              const song = queue.items[index];
+              let playlistPanelVideoRenderer;
+              if (song.playlistPanelVideoRenderer) {
+                playlistPanelVideoRenderer = song.playlistPanelVideoRenderer;
+              } else if (song.playlistPanelVideoWrapperRenderer) {
+                playlistPanelVideoRenderer = song.playlistPanelVideoWrapperRenderer.primaryRenderer.playlistPanelVideoRenderer;
+              }
+
+              if (playlistPanelVideoRenderer) {
+                document.querySelector("ytmusic-app-layout>ytmusic-player-bar").queue.removeByVideoId(playlistPanelVideoRenderer.videoId);
+                return true;
+              }
+              return false;
+            })
+          `)
+        )(removeIndex);
+        break;
+      }
+
+      case "moveQueueItem": {
+        const moveData = JSON.parse(value);
+        try {
+          await (await webFrame.executeJavaScript(moveQueueScript))(moveData.from, moveData.to);
+        } catch (e) {
+          console.error("Failed to move queue item:", e);
+        }
+        break;
+      }
+
+      case "toggleLibrary": {
+        (
+          await webFrame.executeJavaScript(`
+            (function() {
+              const currentMenu = document.querySelector("ytmusic-app-layout>ytmusic-player-bar").getMenuRenderer();
+              if (!currentMenu) return;
+
+              for (let i = 0; i < currentMenu.items.length; i++) {
+                const item = currentMenu.items[i];
+                if (item.toggleMenuServiceItemRenderer) {
+                  if (
+                    item.toggleMenuServiceItemRenderer.defaultIcon.iconType === "BOOKMARK_BORDER" ||
+                    item.toggleMenuServiceItemRenderer.defaultIcon.iconType === "BOOKMARK"
+                  ) {
+                    const state = window.__YTMD_HOOK__.ytmStore.getState();
+                    const defaultToken = item.toggleMenuServiceItemRenderer.defaultServiceEndpoint.feedbackEndpoint.feedbackToken;
+                    const toggledToken = item.toggleMenuServiceItemRenderer.toggledServiceEndpoint.feedbackEndpoint.feedbackToken;
+
+                    const isToggled = state.toggleStates.feedbackToggleStates[defaultToken] || false;
+                    const feedbackToken = isToggled ? toggledToken : defaultToken;
+
+                    var feedbackEvent = {
+                      bubbles: true,
+                      cancelable: false,
+                      composed: true,
+                      detail: {
+                        actionName: "yt-service-request",
+                        args: [
+                          document.querySelector("ytmusic-app-layout>ytmusic-player-bar"),
+                          {
+                            feedbackEndpoint: {
+                              feedbackToken: feedbackToken
+                            }
+                          }
+                        ],
+                        optionalAction: false,
+                        returnValue: []
+                      }
+                    };
+                    document.querySelector("ytmusic-app-layout>ytmusic-player-bar").dispatchEvent(new CustomEvent("yt-action", feedbackEvent));
+                    window.__YTMD_HOOK__.ytmStore.dispatch({
+                      type: "SET_FEEDBACK_TOGGLE_STATE",
+                      payload: { defaultEndpointFeedbackToken: defaultToken, isToggled: !isToggled }
+                    });
+                    break;
+                  }
+                }
+              }
+            })
+          `)
+        )();
+        break;
+      }
+
+      case "addToPlaylist": {
+        const playlistData = value;
+        try {
+          await (await webFrame.executeJavaScript(addToPlaylistScript))(playlistData.playlistId, playlistData.videoId);
+        } catch (e) {
+          console.error("Failed to add to playlist:", e);
+        }
+        break;
+      }
     }
   });
 
@@ -590,12 +733,144 @@ window.addEventListener("load", async () => {
     const playlists = [];
     for (const rawPlaylist of rawPlaylists) {
       const playlist = rawPlaylist.playlistAddToOptionRenderer;
+      if (!playlist) continue;
       playlists.push({
         id: playlist.playlistId,
-        title: getYTMTextRun(playlist.title.runs)
+        title: playlist.title?.simpleText || getYTMTextRun(playlist.title?.runs || []),
+        thumbnails: playlist.thumbnail?.thumbnails || [],
+        containsVideo: playlist.containsSelectedVideos === "ALL"
       });
     }
     ipcRenderer.send(`ytmView:getPlaylists:response:${requestId}`, playlists);
+  });
+
+  ipcRenderer.on("ytmView:libraryState", async (_event, requestId) => {
+    try {
+      const result = await (
+        await webFrame.executeJavaScript(`
+          (function() {
+            const menuRenderer = document.querySelector("ytmusic-app-layout>ytmusic-player-bar")?.getMenuRenderer?.();
+            if (!menuRenderer || !menuRenderer.items) return null;
+
+            const result = { inLibrary: false, isLiked: false, isDisliked: false };
+            for (const item of menuRenderer.items) {
+              const toggle = item.toggleMenuServiceItemRenderer;
+              if (!toggle) continue;
+              const text = toggle.defaultText?.runs?.[0]?.text || "";
+              if (text === "Save to library" || text === "Remove from library") {
+                result.inLibrary = !!toggle.isToggled;
+              }
+              if (text === "Add to liked songs" || text === "Remove from liked songs") {
+                result.isLiked = !!toggle.isToggled;
+              }
+            }
+            return result;
+          })
+        `)
+      )();
+      ipcRenderer.send(`ytmView:libraryState:response:${requestId}`, result);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:libraryState:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:getLyrics", async (_event, requestId) => {
+    try {
+      const lyrics = await (await webFrame.executeJavaScript(getLyricsScript))();
+      ipcRenderer.send(`ytmView:getLyrics:response:${requestId}`, lyrics);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:getLyrics:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:addToPlaylist", async (_event, requestId, playlistId, videoId) => {
+    try {
+      const result = await (await webFrame.executeJavaScript(addToPlaylistScript))(playlistId, videoId);
+      ipcRenderer.send(`ytmView:addToPlaylist:response:${requestId}`, result);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:addToPlaylist:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:search", async (_event, requestId, query, filter) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(searchScript))(query, filter);
+      ipcRenderer.send(`ytmView:search:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:search:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:home", async (_event, requestId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(homeScript))();
+      ipcRenderer.send(`ytmView:home:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:home:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:browse", async (_event, requestId, browseId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(browseScript))(browseId);
+      ipcRenderer.send(`ytmView:browse:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:browse:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:songInfo", async (_event, requestId, videoId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(songInfoScript))(videoId);
+      ipcRenderer.send(`ytmView:songInfo:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:songInfo:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:next", async (_event, requestId, videoId, playlistId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(nextScript))(videoId, playlistId);
+      ipcRenderer.send(`ytmView:next:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:next:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:explore", async (_event, requestId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(exploreScript))();
+      ipcRenderer.send(`ytmView:explore:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:explore:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:history", async (_event, requestId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(historyScript))();
+      ipcRenderer.send(`ytmView:history:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:history:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:getAutomixChips", async (_event, requestId) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(automixChipsScript))("get", null);
+      ipcRenderer.send(`ytmView:getAutomixChips:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:getAutomixChips:response:${requestId}`, null);
+    }
+  });
+
+  ipcRenderer.on("ytmView:selectAutomixChip", async (_event, requestId, chipIndex) => {
+    try {
+      const results = await (await webFrame.executeJavaScript(automixChipsScript))("select", chipIndex);
+      ipcRenderer.send(`ytmView:selectAutomixChip:response:${requestId}`, results);
+    } catch (e) {
+      ipcRenderer.send(`ytmView:selectAutomixChip:response:${requestId}`, null);
+    }
   });
 
   store.onDidAnyChange(newState => {

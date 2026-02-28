@@ -32,9 +32,12 @@ export type StoreSchema = {
   integrations: {
     companionServerEnabled: boolean;
     companionServerAuthTokens: string | null; // array[object] | Encrypted for security
+    companionServerPort: number;
     companionServerCORSWildcardEnabled: boolean;
     discordPresenceEnabled: boolean;
     lastFMEnabled: boolean;
+    companionDashboardEnabled: boolean;
+    companionDashboardPassword: string;
   };
   shortcuts: {
     playPause: string;

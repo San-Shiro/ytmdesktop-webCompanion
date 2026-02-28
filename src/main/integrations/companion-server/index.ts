@@ -13,10 +13,37 @@ import cors from "@fastify/cors";
 import MemoryStore from "../../memory-store";
 import log from "electron-log";
 import { isDefinedAPIError } from "./api-shared/errors";
+import fastifyCookie from "@fastify/cookie";
+import fastifyStatic from "@fastify/static";
+import path from "node:path";
+import crypto from "node:crypto";
+import os from "node:os";
+import { addDashboardSession, isDashboardSession } from "./api-shared/auth";
+
+function getLocalIP(): string {
+  const interfaces = os.networkInterfaces();
+  let fallback: string | null = null;
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family !== "IPv4" || iface.internal) continue;
+      // Skip APIPA/link-local addresses
+      if (iface.address.startsWith("169.254.")) continue;
+      // Prefer common LAN ranges
+      if (iface.address.startsWith("192.168.") || iface.address.startsWith("10.") || iface.address.startsWith("172.")) {
+        return iface.address;
+      }
+      if (!fallback) fallback = iface.address;
+    }
+  }
+  return fallback || "localhost";
+}
+
 
 export default class CompanionServer implements IIntegration {
   private listenIp = "0.0.0.0";
-  private listenPort = 9863;
+  private get listenPort(): number {
+    return this.store?.get("integrations")?.companionServerPort ?? 9863;
+  }
   private fastifyServer: FastifyInstance;
   private store: Conf<StoreSchema>;
   private memoryStore: MemoryStore<MemoryStoreSchema>;
@@ -26,8 +53,10 @@ export default class CompanionServer implements IIntegration {
   private createServer() {
     this.fastifyServer = Fastify().withTypeProvider<TypeBoxTypeProvider>();
     this.fastifyServer.register(cors, {
-      origin: this.store.get<"integrations.companionServerCORSWildcardEnabled", boolean>("integrations.companionServerCORSWildcardEnabled", false) ? "*" : false
+      origin: this.store.get<"integrations.companionServerCORSWildcardEnabled", boolean>("integrations.companionServerCORSWildcardEnabled", false) ? "*" : false,
+      credentials: true
     });
+    this.fastifyServer.register(fastifyCookie);
     this.fastifyServer.register(FastifyIO, {
       transports: ["websocket"],
       allowUpgrades: false,
@@ -35,7 +64,8 @@ export default class CompanionServer implements IIntegration {
       cors: {
         origin: this.store.get<"integrations.companionServerCORSWildcardEnabled", boolean>("integrations.companionServerCORSWildcardEnabled", false)
           ? "*"
-          : false
+          : false,
+        credentials: true
       }
     });
     this.fastifyServer.register(CompanionServerAPIv1, {
@@ -62,8 +92,68 @@ export default class CompanionServer implements IIntegration {
       reply.send(error);
     });
     this.fastifyServer.get("/metadata", (request, reply) => {
+      const localIp = getLocalIP();
+      const port = this.listenPort;
       reply.send({
-        apiVersions: ["v1"]
+        apiVersions: ["v1"],
+        dashboardUrl: `http://${localIp}:${port}/dashboard`
+      });
+    });
+
+    // ── Dashboard Routes ─────────────────────────────────────
+    const dashboardDir = path.join(__dirname, "dashboard");
+
+    // Serve static dashboard files
+    this.fastifyServer.register(fastifyStatic, {
+      root: dashboardDir,
+      prefix: "/dashboard/",
+      decorateReply: false,
+      wildcard: false
+    });
+
+    // Dashboard index — serves login or dashboard page
+    this.fastifyServer.get("/dashboard", (request, reply) => {
+      if (!this.store.get("integrations.companionDashboardEnabled")) {
+        reply.code(404).send({ error: "Dashboard disabled" });
+        return;
+      }
+      const indexPath = path.join(dashboardDir, "index.html");
+      const html = require("node:fs").readFileSync(indexPath, "utf-8");
+      reply.type("text/html").send(html);
+    });
+
+    // Login endpoint
+    this.fastifyServer.post<{ Body: { password: string } }>("/dashboard/login", (request, reply) => {
+      if (!this.store.get("integrations.companionDashboardEnabled")) {
+        reply.code(404).send({ error: "Dashboard disabled" });
+        return;
+      }
+      const expected = this.store.get("integrations.companionDashboardPassword") || "ytmd";
+      if (request.body?.password === expected) {
+        const sessionId = crypto.randomUUID();
+        addDashboardSession(sessionId);
+        reply.setCookie("ytmd_session", sessionId, { path: "/", httpOnly: true, sameSite: "lax" });
+        reply.send({ ok: true });
+      } else {
+        reply.code(401).send({ error: "Wrong password" });
+      }
+    });
+
+    // Session check endpoint
+    this.fastifyServer.get("/dashboard/session", (request, reply) => {
+      if (isDashboardSession(request)) {
+        reply.send({ ok: true });
+      } else {
+        reply.code(401).send({ error: "No session" });
+      }
+    });
+
+    // Local IP endpoint for dashboard
+    this.fastifyServer.get("/dashboard/info", (request, reply) => {
+      reply.send({
+        localIp: getLocalIP(),
+        port: this.listenPort,
+        dashboardUrl: `http://${getLocalIP()}:${this.listenPort}/dashboard`
       });
     });
 

@@ -1,0 +1,122 @@
+---
+name: Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 2.0.11)'
+        required: true
+        default: '2.0.11'
+      prerelease:
+        description: 'Pre-release?'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: windows
+            arch: x64
+          - os: macos-latest
+            platform: macos
+            arch: x64
+          - os: macos-latest
+            platform: macos
+            arch: arm64
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable yarn
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          cache: 'yarn'
+          node-version: '20.9.0'
+
+      - name: Install dependencies
+        run: yarn --immutable
+
+      - name: Build installer (${{ matrix.platform }}-${{ matrix.arch }})
+        run: yarn make --arch ${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            out/make/squirrel.windows/${{ matrix.arch }}/*.exe
+            out/make/deb/${{ matrix.arch }}/*.deb
+            out/make/rpm/${{ matrix.arch }}/*.rpm
+            out/make/zip/darwin/${{ matrix.arch }}/*.zip
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: List artifacts
+        run: find artifacts -type f | head -50
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( -name "*.exe" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" \) -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: "v${{ github.event.inputs.version }} — Web Dashboard"
+          body: |
+            ## YouTube Music Desktop App v${{ github.event.inputs.version }}
+
+            ### 📱 Web Dashboard (New!)
+            Control YouTube Music from your phone or any browser on your local network.
+            - Open `http://localhost:9863/dashboard` after launching
+            - Password protected (default: `ytmd`, configurable in Settings)
+            - Works on any device connected to the same WiFi
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | **Windows** | `.exe` installer (x64) |
+            | **macOS** | `.zip` (x64 + ARM64) |
+            | **Linux** | `.deb` (Debian/Ubuntu) + `.rpm` (Fedora/RHEL) |
+
+            ### Changelog
+            - Bundled web dashboard into native app
+            - Password-based login for dashboard access
+            - Cookie-based session auth (no API tokens needed)
+            - Local IP detection for phone access
+            - Dashboard toggle and password in Settings → Integrations
+          files: release-files/*
+          prerelease: ${{ github.event.inputs.prerelease }}
+          draft: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

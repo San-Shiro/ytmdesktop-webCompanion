@@ -116,7 +116,34 @@ export function isAuthValid(store: Conf<StoreSchema>, authToken: string): [boole
   return [false, null];
 }
 
+// Dashboard session management
+const dashboardSessions = new Set<string>();
+
+export function addDashboardSession(sessionId: string) {
+  dashboardSessions.add(sessionId);
+}
+
+export function clearDashboardSessions() {
+  dashboardSessions.clear();
+}
+
+export function isDashboardSession(request: FastifyRequest): boolean {
+  const cookie = (request as any).cookies?.ytmd_session;
+  return cookie && dashboardSessions.has(cookie);
+}
+
+export function isDashboardSessionId(sessionId: string): boolean {
+  return sessionId && dashboardSessions.has(sessionId);
+}
+
 export function isAuthValidMiddleware(store: Conf<StoreSchema>, request: FastifyRequest, response: FastifyReply, next: HookHandlerDoneFunction) {
+  // Dashboard session bypass — cookie-based, no token needed
+  if (isDashboardSession(request)) {
+    request.authId = "dashboard";
+    next();
+    return;
+  }
+
   const authToken = request.headers.authorization;
   if (!authToken) {
     response.code(401);

@@ -1,4 +1,6 @@
 import { execSync } from "node:child_process";
+import { cpSync } from "node:fs";
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 let gitBranch: string = "";
@@ -29,6 +31,16 @@ export default defineConfig({
       external: ["bufferutil", "utf-8-validate"]
     }
   },
+  plugins: [
+    {
+      name: "copy-dashboard",
+      writeBundle() {
+        const src = resolve(__dirname, "../src/main/integrations/companion-server/dashboard");
+        const dest = resolve(__dirname, "../.vite/main/dashboard");
+        cpSync(src, dest, { recursive: true });
+      }
+    }
+  ],
   define: {
     YTMD_DISABLE_UPDATES: devBuild,
     YTMD_UPDATE_FEED_OWNER: process.env.YTMD_UPDATE_FEED_OWNER ? `'${process.env.YTMD_UPDATE_FEED_OWNER}'` : "'ytmdesktop'",
